@@ -31,6 +31,12 @@ int wmain(int argc, wchar_t** argv) {
         GetTempPathW(MAX_PATH, temp);
         temporary = std::filesystem::path(temp) / (L"OpenInTerminal 测试 & ;(test)-" + std::to_wstring(GetCurrentProcessId()));
         std::filesystem::create_directories(temporary);
+        // Hosted runners can expose TEMP through an 8.3 alias. Explorer resolves
+        // that alias to its long form before passing the folder to the command.
+        wchar_t longPath[32768];
+        const auto length = GetLongPathNameW(temporary.c_str(), longPath, 32768);
+        Check(length > 0 && length < 32768, "Temporary directory could not be resolved");
+        temporary = longPath;
         const auto settings = temporary / L"settings.json";
         std::ofstream(settings) << R"({"profiles":{"list":[{"name":"测试 & PowerShell","guid":"{574e775e-4f2a-5b96-ac1e-a2962a402336}"},{"name":"hidden","hidden":true}]}})";
         SetEnvironmentVariableW(L"OIT_SETTINGS_PATH", settings.c_str());
@@ -98,7 +104,10 @@ int wmain(int argc, wchar_t** argv) {
             auto expectedPath = oit::Utf8(temporary.native());
             const auto semicolon = expectedPath.find(';');
             expectedPath.insert(semicolon, "\\");
-            Check(captured.ends_with(expectedPath + "\\.\n"), "Directory lost Unicode, escaping, or quoting");
+            if (!captured.ends_with(expectedPath + "\\.\n")) {
+                std::cerr << "Expected directory: " << expectedPath << "\\.\nCaptured arguments:\n" << captured;
+                throw std::runtime_error("Directory lost Unicode, escaping, or quoting");
+            }
             Ok(root->GetState(nullptr, TRUE, &state));
             Check(state == ECS_HIDDEN, "Virtual location was exposed");
             Check(canUnload() == S_FALSE, "Live COM objects not tracked");
