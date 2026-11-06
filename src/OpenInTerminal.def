@@ -1,0 +1,5 @@
+LIBRARY OpenInTerminal
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
+

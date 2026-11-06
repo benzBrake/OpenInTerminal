@@ -1,0 +1,95 @@
+name: Build and test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    env:
+      MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER || 'CN=OpenInTerminal' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            cmake_arch: x64
+          - arch: arm64
+            cmake_arch: ARM64
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -A ${{ matrix.cmake_arch }} -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        if: matrix.arch == 'x64'
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Test installer deployment failures
+        shell: powershell
+        run: ./tests/installer_tests.ps1
+      - name: Prepare package and unsigned MSIX
+        shell: pwsh
+        run: ./scripts/package.ps1 -BinaryDirectory build/Release -OutputDirectory dist/package -Architecture ${{ matrix.arch }} -Publisher $env:MSIX_PUBLISHER -Msix
+      - name: Sign MSIX when release credentials are configured
+        shell: pwsh
+        env:
+          MSIX_CERTIFICATE_BASE64: ${{ secrets.MSIX_CERTIFICATE_BASE64 }}
+          MSIX_CERTIFICATE_PASSWORD: ${{ secrets.MSIX_CERTIFICATE_PASSWORD }}
+        run: |
+          if ($env:MSIX_CERTIFICATE_BASE64) {
+            $signed = 'dist/OpenInTerminal-${{ matrix.arch }}.msix'
+            Copy-Item 'dist/OpenInTerminal-${{ matrix.arch }}-unsigned.msix' $signed
+            ./scripts/sign-msix.ps1 -Path $signed
+          }
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $iscc = ./scripts/get-inno.ps1
+          $arguments = @{
+            PackageDirectory = 'dist/package'
+            Architecture = '${{ matrix.arch }}'
+            IsccPath = $iscc
+          }
+          $signed = 'dist/OpenInTerminal-${{ matrix.arch }}.msix'
+          if (Test-Path -LiteralPath $signed) { $arguments.SignedMsixPath = $signed }
+          ./scripts/build-installer.ps1 @arguments
+      - name: Smoke test x64 installer on the disposable runner
+        if: matrix.arch == 'x64'
+        shell: powershell
+        run: |
+          $key = 'HKLM:/SOFTWARE/Microsoft/Windows/CurrentVersion/AppModelUnlock'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -PropertyType DWord -Value 1 -Force | Out-Null
+          $installer = Get-ChildItem dist/installer/*-setup*.exe | Select-Object -First 1
+          ./tests/installer_smoke.ps1 -InstallerPath $installer.FullName
+      - name: Verify failed registration rolls back the installer
+        if: matrix.arch == 'x64'
+        shell: powershell
+        run: |
+          $iscc = ./scripts/get-inno.ps1
+          ./tests/installer_rollback.ps1 -PackageDirectory dist/package -IsccPath $iscc
+      - name: Prepare development installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/scripts
+          Copy-Item scripts/install.ps1,scripts/uninstall.ps1,scripts/stop-extension-host.ps1,scripts/get-package-location.ps1 dist/scripts/
+          Copy-Item README.md dist/
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: OpenInTerminal-${{ matrix.arch }}
+          path: |
+            dist/installer/*.exe
+            dist/package/
+            dist/scripts/
+            dist/*.msix
+            dist/README.md
+  container:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: docker build -f docker/Dockerfile -t openinterminal-build:bookworm .
+      - run: docker run --rm -v "$PWD:/workspace" openinterminal-build:bookworm
