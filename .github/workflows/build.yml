@@ -1,8 +1,16 @@
 name: Build and test
 on:
   push:
+    tags-ignore:
+      - 'v*'
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit to build for a release
+        type: string
+        required: true
 permissions:
   contents: read
 jobs:
@@ -20,6 +28,8 @@ jobs:
             cmake_arch: ARM64
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - name: Configure
         shell: pwsh
         run: cmake -S . -B build -A ${{ matrix.cmake_arch }} -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
@@ -76,7 +86,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/scripts
-          Copy-Item scripts/install.ps1,scripts/uninstall.ps1,scripts/stop-extension-host.ps1,scripts/get-package-location.ps1 dist/scripts/
+          Copy-Item scripts/install.ps1,scripts/uninstall.ps1,scripts/setup.ps1,scripts/stop-extension-host.ps1,scripts/get-package-location.ps1 dist/scripts/
           Copy-Item README.md dist/
       - uses: actions/upload-artifact@v7.0.2
         with:
@@ -91,5 +101,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - run: docker build -f docker/Dockerfile -t openinterminal-build:bookworm .
       - run: docker run --rm -v "$PWD:/workspace" openinterminal-build:bookworm

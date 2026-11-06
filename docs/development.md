@@ -86,7 +86,19 @@ MSVC 静态链接 C++ 运行库；MinGW 静态链接其运行库。DLL 只依赖
 - Secret `MSIX_CERTIFICATE_PASSWORD`：PFX 密码，无密码时可留空。
 - Variable `MSIX_PUBLISHER`：证书的 Subject，默认 `CN=OpenInTerminal`。
 
-配置后，CI 用 Windows SDK 的 SignTool 签名并验证 MSIX，将它嵌入不带 `-dev` 后缀的 Inno 安装器。证书必须受目标设备信任；CI 不生成自签名证书来代替正式签名。保持 Publisher 稳定，每次正式更新递增包版本；从不同 Publisher 的开发版迁移，或从签名版切回开发版时，先卸载旧版。当前工作流仅构建和上传 artifact，不自动发布 Release。
+配置后，CI 用 Windows SDK 的 SignTool 签名并验证 MSIX，将它嵌入不带 `-dev` 后缀的 Inno 安装器。证书必须受目标设备信任；CI 不生成自签名证书来代替正式签名。保持 Publisher 稳定，每次正式更新递增包版本；从不同 Publisher 的开发版迁移，或从签名版切回开发版时，先卸载旧版。
+
+### 发布 Release
+
+`.github/workflows/release.yml` 在推送 `v*` 标签时自动发布，也支持在 Actions → Release → Run workflow 中填写已有标签手动发布。标签格式为 `v主版本.次版本.修订号`（例如 `v0.1.0`），可带 `-rc.1` 等预发布后缀；带后缀的版本自动标记为 GitHub Pre-release。标签中的三段版本必须与该标签提交的 `CMakeLists.txt` 中 `project` 版本一致，安装包版本补第四段 `.0`。
+
+```powershell
+# 先提交版本号和待发布的代码，再创建、推送标签
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Release 流程复用上述 Windows 和容器构建，全部构建和测试通过后才创建 Release，自动生成更新说明，并上传 x64、ARM64 安装 EXE、开发包 ZIP、MSIX 和 `SHA256SUMS.txt`。ZIP 包含 package 目录、安装/卸载脚本和 README。未配置证书也可发布，安装器保留 `-dev` 后缀。发布失败后可重跑失败任务；如果同名 Release 已存在，创建步骤会报错，不覆盖已发布版本。
 
 本地已有签名 MSIX 时，也可以复用它打包，不需要在本机安装 Windows SDK：
 

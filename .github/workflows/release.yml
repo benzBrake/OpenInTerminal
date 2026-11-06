@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (e.g. v0.1.0 or v0.1.0-rc.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - name: Validate tag format
+        id: tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo '::error::Expected vMAJOR.MINOR.PATCH, optionally followed by a prerelease suffix.'
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            echo 'prerelease=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'prerelease=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+      - name: Check package version matches tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          version=$(sed -nE 's/^project\(OpenInTerminal VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)
+          tag_version="${RELEASE_TAG#v}"
+          if [[ "$version" != "${tag_version%%-*}" ]]; then
+            echo '::error::Tag version must match the project version in CMakeLists.txt.'
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
+    secrets: inherit
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+    steps:
+      - name: Download tested build artifacts
+        run: gh run download "$GITHUB_RUN_ID" --pattern 'OpenInTerminal-*' --dir artifacts
+      - name: Prepare release assets and checksums
+        run: |
+          mkdir release
+          for arch in x64 arm64; do
+            artifact="artifacts/OpenInTerminal-$arch"
+            # Require exactly one installer for each architecture.
+            shopt -s nullglob
+            installers=("$artifact"/installer/*-setup*.exe)
+            if [[ ${#installers[@]} -ne 1 ]]; then
+              echo "::error::Expected one $arch installer."
+              exit 1
+            fi
+            cp "${installers[0]}" release/
+            for msix in "$artifact"/*.msix; do
+              name=$(basename "$msix")
+              cp "$msix" "release/${name/OpenInTerminal-/OpenInTerminal-$RELEASE_TAG-}"
+            done
+            (cd "$artifact" && zip -qr "../../release/OpenInTerminal-$RELEASE_TAG-$arch.zip" package scripts README.md)
+          done
+          (cd release && sha256sum * > SHA256SUMS.txt)
+      - name: Publish GitHub Release
+        run: |
+          flags=()
+          if [[ "$PRERELEASE" == true ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" release/* \
+            --verify-tag --title "Open In Terminal $RELEASE_TAG" --generate-notes \
+            --notes 'Download the setup EXE for your architecture (x64 or ARM64). Installers ending in -dev.exe require Windows Developer Mode. ZIP files contain the development package and installation scripts. SHA256SUMS.txt contains asset checksums.' \
+            "${flags[@]}"
