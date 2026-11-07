@@ -9,7 +9,25 @@ foreach ($package in $packages) {
         & (Join-Path $PSScriptRoot 'stop-extension-host.ps1') -DllPath (Join-Path $location 'OpenInTerminal.dll')
     }
 }
-$packages | Remove-AppxPackage
+foreach ($package in $packages) {
+    # Deployment can transiently fail to load a Windows extension handler even
+    # though our payload is intact. Retry only that failure, retaining all files
+    # and registry entries if Windows still cannot remove the package.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            $package | Remove-AppxPackage
+            break
+        } catch {
+            if (-not (Get-AppxPackage -Name 'Ryan.OpenInTerminal')) { break }
+            if ($attempt -eq 3 -or ($_ | Out-String) -notmatch '(?i)0x8007007e') { throw }
+            Write-Warning "Windows could not load a deployment extension; retrying package removal ($attempt/3)."
+            Start-Sleep -Seconds 1
+        }
+    }
+}
+if (Get-AppxPackage -Name 'Ryan.OpenInTerminal') {
+    throw 'Windows still reports Open In Terminal as registered. Installation files have been preserved; retry uninstalling.'
+}
 foreach ($type in @('Directory','Directory/Background','Drive')) {
     $key = "HKCU:/Software/Classes/$type/shell/OpenInTerminal"
     if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }

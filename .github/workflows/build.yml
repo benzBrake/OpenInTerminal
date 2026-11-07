@@ -40,7 +40,9 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
       - name: Test installer deployment failures
         shell: powershell
-        run: ./tests/installer_tests.ps1
+        run: |
+          ./tests/installer_tests.ps1
+          ./tests/uninstaller_tests.ps1
       - name: Prepare package and unsigned MSIX
         shell: pwsh
         run: ./scripts/package.ps1 -BinaryDirectory build/Release -OutputDirectory dist/package -Architecture ${{ matrix.arch }} -Publisher $env:MSIX_PUBLISHER -Msix
