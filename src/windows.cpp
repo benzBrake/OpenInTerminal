@@ -62,6 +62,14 @@ static bool Exists(const std::filesystem::path& path) {
     return std::filesystem::is_regular_file(path, error);
 }
 
+static bool ExecutableExists(const std::filesystem::path& path) {
+    // App execution aliases are APPEXECLINK reparse points. MSVC's
+    // is_regular_file rejects them even though ShellExecute can launch them.
+    // Inspect the entry itself rather than classifying its reparse target.
+    const auto attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
 static std::filesystem::path PackageLocation(const std::wstring& family) {
     using ListPackages = LONG (WINAPI*)(PCWSTR, UINT32*, PWSTR*, UINT32*, PWSTR);
     using PackagePath = LONG (WINAPI*)(PCWSTR, UINT32*, PWSTR);
@@ -117,13 +125,13 @@ Terminal LoadTerminal() {
             // ERROR_ACCESS_DENIED, even though its icons are readable.
             const auto aliases = local / L"Microsoft" / L"WindowsApps";
             result.executable = aliases / family / L"wt.exe";
-            if (!Exists(result.executable)) {
+            if (!ExecutableExists(result.executable)) {
                 if (channel == L"stable") result.executable = aliases / L"wt.exe";
                 else throw std::runtime_error("Selected Terminal channel has no wt.exe alias; set terminalPath in config.json");
             }
         }
 
-        if (!Exists(result.executable)) throw std::runtime_error("Windows Terminal executable was not found");
+        if (!ExecutableExists(result.executable)) throw std::runtime_error("Windows Terminal executable was not found: " + Utf8(result.executable.native()));
         result.profiles = ParseProfiles(ReadFile(result.settings));
     } catch (const std::exception& error) {
         result.error = error.what();

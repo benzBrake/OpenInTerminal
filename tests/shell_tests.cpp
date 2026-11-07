@@ -40,6 +40,17 @@ int wmain(int argc, wchar_t** argv) {
         const auto settings = temporary / L"settings.json";
         std::ofstream(settings) << R"({"profiles":{"list":[{"name":"测试 & PowerShell","guid":"{574e775e-4f2a-5b96-ac1e-a2962a402336}"},{"name":"hidden","hidden":true}]}})";
         SetEnvironmentVariableW(L"OIT_SETTINGS_PATH", settings.c_str());
+        // Exercise a real APPEXECLINK when Terminal is installed. A normal
+        // executable fixture does not catch MSVC rejecting execution aliases.
+        const auto alias = std::filesystem::path(oit::Environment(L"LOCALAPPDATA")) /
+            L"Microsoft" / L"WindowsApps" / L"wt.exe";
+        const auto attributes = GetFileAttributesW(alias.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            SetEnvironmentVariableW(L"OIT_TERMINAL_PATH", alias.c_str());
+            const auto terminal = oit::LoadTerminal();
+            Check(terminal.error.empty() && terminal.profiles.size() == 1,
+                "App execution alias was rejected as a non-regular file");
+        }
         wchar_t executable[32768];
         GetModuleFileNameW(nullptr, executable, 32768);
         SetEnvironmentVariableW(L"OIT_TERMINAL_PATH", executable);

@@ -44,10 +44,12 @@ int wmain(int argc, wchar_t** argv) {
                         if (result != S_OK) status = 1;
                     } else {
                     const auto print = [](IExplorerCommand* command) {
-                        PWSTR title = nullptr, icon = nullptr;
+                        PWSTR title = nullptr, icon = nullptr, tip = nullptr;
                         command->GetTitle(nullptr, &title);
                         command->GetIcon(nullptr, &icon);
+                        command->GetToolTip(nullptr, &tip);
                         std::cout << (title ? oit::Utf8(title) : "(no title)") << "\n  Icon: " << (icon ? oit::Utf8(icon) : "(none)") << '\n';
+                        if (tip) std::cout << "  Tooltip: " << oit::Utf8(tip) << '\n';
                         if (icon) {
                             std::wstring location(icon);
                             const auto index = PathParseIconLocationW(location.data());
@@ -56,7 +58,7 @@ int wmain(int argc, wchar_t** argv) {
                             std::cout << "  Icon extraction: " << (count && large ? "OK" : "FAILED") << '\n';
                             if (large) DestroyIcon(large);
                         }
-                        CoTaskMemFree(title); CoTaskMemFree(icon);
+                        CoTaskMemFree(title); CoTaskMemFree(icon); CoTaskMemFree(tip);
                     };
                     print(root.get());
                     oit::ComPtr<IEnumExplorerCommand> enumerator;
